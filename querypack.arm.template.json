@@ -1,68 +1,68 @@
 {
-    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "1.0.0.0",
-    "parameters": {
-        "queryPackName": {
-            "type": "String",
-            "metadata": {
-                "description": "The name of the query pack."
-            },
-            "defaultValue": "InvestigationsPack"
-        },
-        "queryPackQueries": {
-            "type": "array",
-            "metadata": {
-                "description": "List of queries needed to be stored inside the query pack."
-            },
-            "defaultValue": [
-                {
-                    "labels": "Account",
-                    "displayName": "Track sign-in Activity",
-                    "body": "\/\/ Track Sign-In Activity\r\n\/\/ This KQL query is used to determine the history of sign-In activity for a particular user account\r\nlet userPrincipalName = \"UPN\";      \/\/Set the users userPrincipalName i.e. user@example.com\r\nlet days = ago(90d);                \/\/Set the time i.e. 12h, 30d\r\n\/\/ Do not edit below this line\r\nSigninLogs\r\n| where TimeGenerated > days\r\n| where UserPrincipalName =~ userPrincipalName\r\n| summarize count(IPAddress) by TimeGenerated, \r\n                                Identity,\r\n                                AuthenticationRequirement,\r\n                                ResultType,\r\n                                RiskState,\r\n                                RiskDetail,\r\n                                UserAgent,\r\n                                ClientAppUsed,\r\n                                AppDisplayName,\r\n                                IPAddress,\r\n                                tostring(LocationDetails.countryOrRegion),\r\n                                tostring(DeviceDetail.operatingSystem),\r\n                                tostring(DeviceDetail.browser),\r\n                                ResultDescription,\r\n                                tostring(DeviceDetail.deviceId),\r\n                                tostring(DeviceDetail.isCompliant),\r\n                                tostring(DeviceDetail.isManaged),\r\n                                ConditionalAccessStatus,\r\n                                tostring(ConditionalAccessPolicies)\r\n| order by TimeGenerated desc"
-                },
-                {
-                    "labels": "IP",
-                    "displayName": "Check IP details",
-                    "body": "\/\/ This KQL query is used to inspect the details of a IP Address.\r\n\/\/ IP Details:\r\n\/\/          Priority, ISP, RiskLevel, network, continent_name, country_name, city, is_anonymous_proxy, is_satellite_provider\r\n\/\/ Used by device:\r\n\/\/          Logons, FullMFA, Users,  authM, Services, Apps, OS, Browsers\r\nlet ipAddress   = dynamic([\"IPADDRESS\"]);     \/\/ Replace with IP address(es) you want to check i.e. dynamic([\"1.1.1.1\",\"4.4.4.4\",\"8.8.8.8\"])\r\nlet shorttime       = 7d;\r\nlet longtime        = 30d;\r\nlet signInLogsShort = SigninLogs | where TimeGenerated > ago(shorttime);\r\nlet signInLogsLong  = SigninLogs | where TimeGenerated > ago(longtime);\r\n\/\/ Do not edit below this line\r\nlet geoData = externaldata(network:string,geoname_id:string,continent_code:string,continent_name:string,\r\ncountry_iso_code:string,country_name:string,is_anonymous_proxy:string,is_satellite_provider:string)\r\n[@\"https:\/\/raw.githubusercontent.com\/datasets\/geoip2-ipv4\/master\/data\/geoip2-ipv4.csv\"] with (ignoreFirstRecord=true, format=\"csv\");\r\nlet ips = ( signInLogsShort\r\n    | where ResultType == 0 );\r\nlet mfaip = ( signInLogsLong\r\n    | where AuthenticationRequirement == 'multiFactorAuthentication'\r\n    | where ResultType == 0\r\n    | extend authentication1Method_ = tostring(parse_json(AuthenticationDetails)[0].authenticationMethod)\r\n    | extend authentication2Method_ = tostring(parse_json(AuthenticationDetails)[1].authenticationMethod)\r\n    | where authentication1Method_ in (\"Password\")\r\n    | where authentication2Method_ != \"Previously satisfied\"\r\n    | summarize FullMFA = dcount(TimeGenerated) by IPAddress, UserPrincipalName );\r\nlet users = ( signInLogsLong\r\n    | summarize count() by UserPrincipalName, IPAddress\r\n    | extend d = pack(\"User\", UserPrincipalName, \"Count\", count_)\r\n    | summarize Users=make_set(d) by IPAddress );\r\nlet service = ( signInLogsLong\r\n    | summarize count() by AppDisplayName, IPAddress\r\n    | order by AppDisplayName asc\r\n    | extend d = pack(\"Svc\", AppDisplayName, \"Count\", count_)\r\n    | summarize Services=make_set(d) by IPAddress );\r\nlet apps = ( signInLogsLong\r\n    | summarize count() by ClientAppUsed, IPAddress\r\n    | extend d = pack(\"App\", ClientAppUsed, \"Count\", count_)\r\n    | summarize Apps=make_set(d) by IPAddress );\r\nlet authmethod = ( signInLogsLong\r\n    | summarize count() by AuthenticationRequirement, IPAddress\r\n    | extend d = pack(\"authM\", AuthenticationRequirement, \"Count\", count_)\r\n    | summarize authM=make_set(d) by IPAddress );\r\nlet OS = ( signInLogsLong\r\n    | extend OS = tostring(DeviceDetail.operatingSystem)\r\n    | summarize count() by OS, IPAddress\r\n    | extend d = pack(\"OS\", OS, \"Count\", count_)\r\n    | summarize OS=make_set(d) by IPAddress );\r\nlet browsers = ( signInLogsLong\r\n    | extend Browser = tostring(DeviceDetail.browser)\r\n    | summarize count() by Browser, IPAddress\r\n    | extend d = pack(\"Browser\", Browser, \"Count\", count_)\r\n    | summarize Browsers=make_set(d) by IPAddress );\r\nlet IPDetails = ( signInLogsShort\r\n    | evaluate ipv4_lookup (geoData, IPAddress, network, false)\r\n    | distinct IPAddress,\r\n               network,\r\n               continent_code,\r\n               continent_name,\r\n               country_iso_code,\r\n               country_name,\r\n               is_anonymous_proxy,\r\n               is_satellite_provider );\r\nlet RiskLevel = ( signInLogsLong\r\n    | project Identity, IPAddress, ConditionalAccessStatus\r\n    | extend count1=iff(ConditionalAccessStatus == \"success\" , 1 , 0) \/\/If Success, Return 1, else 0\r\n    | extend count2=1 \/\/ to be used for total row count\r\n    | summarize SuccessCount=sum(count1), TotalRecords=sum(count2) by IPAddress\r\n    | extend SuccessfulLogonPercent=(SuccessCount*100)\/TotalRecords\r\n    | extend RiskLevel = case(SuccessfulLogonPercent > 80, \"Low\", \r\n                              SuccessfulLogonPercent < 30, \"High\",\r\n                              SuccessCount < 5 and SuccessfulLogonPercent < 80, \"High\",\r\n                              TotalRecords < 5 and SuccessfulLogonPercent < 80, \"High\",\r\n                                \"Low\" ) \/\/ else\r\n    | extend d = pack(\"Level\",SuccessfulLogonPercent,\"Success\", SuccessCount, \"Total\", TotalRecords)\r\n    | summarize Logons=make_set(d) by IPAddress, RiskLevel );\r\nips\r\n| join kind=fullouter   mfaip       on IPAddress\r\n| join kind=inner       users       on IPAddress\r\n| join                  service     on IPAddress\r\n| join                  apps        on IPAddress\r\n| join                  authmethod  on IPAddress\r\n| join                  OS          on IPAddress\r\n| join                  browsers    on IPAddress\r\n| join                  IPDetails   on IPAddress\r\n| join                  RiskLevel   on IPAddress\r\n| project IPAddress,\r\n          RiskLevel,\r\n          network,\r\n          continent_name,\r\n          country_name,\r\n          tostring(LocationDetails.city),\r\n          is_anonymous_proxy,\r\n          is_satellite_provider,\r\n          Logons,\r\n          FullMFA,\r\n          Users,\r\n          authM,\r\n          Services,\r\n          Apps,\r\n          OS,\r\n          Browsers\r\n| order by network asc\r\n| where IPAddress in (ipAddress)"
-                }
-            ]
-        }
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "queryPackName": {
+      "type": "String",
+      "metadata": {
+        "description": "The name of the query pack."
+      },
+      "defaultValue": "InvestigationsPack"
     },
-    "variables": {},
-    "resources": [
+    "queryPackQueries": {
+      "type": "array",
+      "metadata": {
+        "description": "List of queries needed to be stored inside the query pack."
+      },
+      "defaultValue": [
         {
-            "type": "microsoft.operationalInsights/querypacks",
-            "apiVersion": "2019-09-01-preview",
-            "name": "[parameters('queryPackName')]",
-            "location": "[resourceGroup().location]",
-            "properties": {}
+          "labels": "Account",
+          "displayName": "Track sign-in Activity",
+          "body": "\/\/ Track Sign-In Activity\r\n\/\/ This KQL query is used to determine the history of sign-In activity for a particular user account\r\nlet userPrincipalName = \"UPN\";      \/\/Set the users userPrincipalName i.e. user@example.com\r\nlet days = ago(90d);                \/\/Set the time i.e. 12h, 30d\r\n\/\/ Do not edit below this line\r\nSigninLogs\r\n| where TimeGenerated > days\r\n| where UserPrincipalName =~ userPrincipalName\r\n| summarize count(IPAddress) by TimeGenerated, \r\n                                Identity,\r\n                                AuthenticationRequirement,\r\n                                ResultType,\r\n                                RiskState,\r\n                                RiskDetail,\r\n                                UserAgent,\r\n                                ClientAppUsed,\r\n                                AppDisplayName,\r\n                                IPAddress,\r\n                                tostring(LocationDetails.countryOrRegion),\r\n                                tostring(DeviceDetail.operatingSystem),\r\n                                tostring(DeviceDetail.browser),\r\n                                ResultDescription,\r\n                                tostring(DeviceDetail.deviceId),\r\n                                tostring(DeviceDetail.isCompliant),\r\n                                tostring(DeviceDetail.isManaged),\r\n                                ConditionalAccessStatus,\r\n                                tostring(ConditionalAccessPolicies)\r\n| order by TimeGenerated desc"
         },
         {
-            "type": "microsoft.operationalInsights/querypacks/queries",
-            "apiVersion": "2019-09-01-preview",
-            "name": "[concat(parameters('queryPackName'), '/', guid(string(parameters('queryPackQueries')[copyIndex()].displayName)))]",
-            "dependsOn": [
-                "[resourceId('microsoft.operationalInsights/querypacks', parameters('queryPackName'))]"
-            ],
-            "copy": {
-                "name": "queryPackQueries",
-                "count": "[length(parameters('queryPackQueries'))]"
-            },
-            "properties": {
-                "displayName": "[parameters('queryPackQueries')[copyIndex()].displayName]",
-                "body": "[parameters('queryPackQueries')[copyIndex()].body]",
-                "related": {
-                    "categories": [],
-                    "resourceTypes": [
-                        "microsoft.operationalinsights/workspaces"
-                    ]
-                },
-                "tags": {
-                    "labels": [
-                        "[parameters('queryPackQueries')[copyIndex()].labels]"
-                    ]
-                }
-            }
+          "labels": "IP",
+          "displayName": "Check IP details",
+          "body": "\/\/ This KQL query is used to inspect the details of a IP Address.\r\n\/\/ IP Details:\r\n\/\/          Priority, ISP, RiskLevel, network, continent_name, country_name, city, is_anonymous_proxy, is_satellite_provider\r\n\/\/ Used by device:\r\n\/\/          Logons, FullMFA, Users,  authM, Services, Apps, OS, Browsers\r\nlet ipAddress   = dynamic([\"IPADDRESS\"]);     \/\/ Replace with IP address(es) you want to check i.e. dynamic([\"1.1.1.1\",\"4.4.4.4\",\"8.8.8.8\"])\r\nlet shorttime       = 7d;\r\nlet longtime        = 30d;\r\nlet signInLogsShort = SigninLogs | where TimeGenerated > ago(shorttime);\r\nlet signInLogsLong  = SigninLogs | where TimeGenerated > ago(longtime);\r\n\/\/ Do not edit below this line\r\nlet geoData = externaldata(network:string,geoname_id:string,continent_code:string,continent_name:string,\r\ncountry_iso_code:string,country_name:string,is_anonymous_proxy:string,is_satellite_provider:string)\r\n[@\"https:\/\/raw.githubusercontent.com\/datasets\/geoip2-ipv4\/master\/data\/geoip2-ipv4.csv\"] with (ignoreFirstRecord=true, format=\"csv\");\r\nlet ips = ( signInLogsShort\r\n    | where ResultType == 0 );\r\nlet mfaip = ( signInLogsLong\r\n    | where AuthenticationRequirement == 'multiFactorAuthentication'\r\n    | where ResultType == 0\r\n    | extend authentication1Method_ = tostring(parse_json(AuthenticationDetails)[0].authenticationMethod)\r\n    | extend authentication2Method_ = tostring(parse_json(AuthenticationDetails)[1].authenticationMethod)\r\n    | where authentication1Method_ in (\"Password\")\r\n    | where authentication2Method_ != \"Previously satisfied\"\r\n    | summarize FullMFA = dcount(TimeGenerated) by IPAddress, UserPrincipalName );\r\nlet users = ( signInLogsLong\r\n    | summarize count() by UserPrincipalName, IPAddress\r\n    | extend d = pack(\"User\", UserPrincipalName, \"Count\", count_)\r\n    | summarize Users=make_set(d) by IPAddress );\r\nlet service = ( signInLogsLong\r\n    | summarize count() by AppDisplayName, IPAddress\r\n    | order by AppDisplayName asc\r\n    | extend d = pack(\"Svc\", AppDisplayName, \"Count\", count_)\r\n    | summarize Services=make_set(d) by IPAddress );\r\nlet apps = ( signInLogsLong\r\n    | summarize count() by ClientAppUsed, IPAddress\r\n    | extend d = pack(\"App\", ClientAppUsed, \"Count\", count_)\r\n    | summarize Apps=make_set(d) by IPAddress );\r\nlet authmethod = ( signInLogsLong\r\n    | summarize count() by AuthenticationRequirement, IPAddress\r\n    | extend d = pack(\"authM\", AuthenticationRequirement, \"Count\", count_)\r\n    | summarize authM=make_set(d) by IPAddress );\r\nlet OS = ( signInLogsLong\r\n    | extend OS = tostring(DeviceDetail.operatingSystem)\r\n    | summarize count() by OS, IPAddress\r\n    | extend d = pack(\"OS\", OS, \"Count\", count_)\r\n    | summarize OS=make_set(d) by IPAddress );\r\nlet browsers = ( signInLogsLong\r\n    | extend Browser = tostring(DeviceDetail.browser)\r\n    | summarize count() by Browser, IPAddress\r\n    | extend d = pack(\"Browser\", Browser, \"Count\", count_)\r\n    | summarize Browsers=make_set(d) by IPAddress );\r\nlet IPDetails = ( signInLogsShort\r\n    | evaluate ipv4_lookup (geoData, IPAddress, network, false)\r\n    | distinct IPAddress,\r\n               network,\r\n               continent_code,\r\n               continent_name,\r\n               country_iso_code,\r\n               country_name,\r\n               is_anonymous_proxy,\r\n               is_satellite_provider );\r\nlet RiskLevel = ( signInLogsLong\r\n    | project Identity, IPAddress, ConditionalAccessStatus\r\n    | extend count1=iff(ConditionalAccessStatus == \"success\" , 1 , 0) \/\/If Success, Return 1, else 0\r\n    | extend count2=1 \/\/ to be used for total row count\r\n    | summarize SuccessCount=sum(count1), TotalRecords=sum(count2) by IPAddress\r\n    | extend SuccessfulLogonPercent=(SuccessCount*100)\/TotalRecords\r\n    | extend RiskLevel = case(SuccessfulLogonPercent > 80, \"Low\", \r\n                              SuccessfulLogonPercent < 30, \"High\",\r\n                              SuccessCount < 5 and SuccessfulLogonPercent < 80, \"High\",\r\n                              TotalRecords < 5 and SuccessfulLogonPercent < 80, \"High\",\r\n                                \"Low\" ) \/\/ else\r\n    | extend d = pack(\"Level\",SuccessfulLogonPercent,\"Success\", SuccessCount, \"Total\", TotalRecords)\r\n    | summarize Logons=make_set(d) by IPAddress, RiskLevel );\r\nips\r\n| join kind=fullouter   mfaip       on IPAddress\r\n| join kind=inner       users       on IPAddress\r\n| join                  service     on IPAddress\r\n| join                  apps        on IPAddress\r\n| join                  authmethod  on IPAddress\r\n| join                  OS          on IPAddress\r\n| join                  browsers    on IPAddress\r\n| join                  IPDetails   on IPAddress\r\n| join                  RiskLevel   on IPAddress\r\n| project IPAddress,\r\n          RiskLevel,\r\n          network,\r\n          continent_name,\r\n          country_name,\r\n          tostring(LocationDetails.city),\r\n          is_anonymous_proxy,\r\n          is_satellite_provider,\r\n          Logons,\r\n          FullMFA,\r\n          Users,\r\n          authM,\r\n          Services,\r\n          Apps,\r\n          OS,\r\n          Browsers\r\n| order by network asc\r\n| where IPAddress in (ipAddress)"
         }
-    ]
+      ]
+    }
+  },
+  "variables": {},
+  "resources": [
+    {
+      "type": "microsoft.operationalInsights/querypacks",
+      "apiVersion": "2019-09-01-preview",
+      "name": "[parameters('queryPackName')]",
+      "location": "[resourceGroup().location]",
+      "properties": {}
+    },
+    {
+      "type": "microsoft.operationalInsights/querypacks/queries",
+      "apiVersion": "2019-09-01-preview",
+      "name": "[concat(parameters('queryPackName'), '/', guid(string(parameters('queryPackQueries')[copyIndex()].displayName)))]",
+      "dependsOn": [
+        "[resourceId('microsoft.operationalInsights/querypacks', parameters('queryPackName'))]"
+      ],
+      "copy": {
+        "name": "queryPackQueries",
+        "count": "[length(parameters('queryPackQueries'))]"
+      },
+      "properties": {
+        "displayName": "[parameters('queryPackQueries')[copyIndex()].displayName]",
+        "body": "[parameters('queryPackQueries')[copyIndex()].body]",
+        "related": {
+          "categories": [],
+          "resourceTypes": [
+            "microsoft.operationalinsights/workspaces"
+          ]
+        },
+        "tags": {
+          "labels": [
+            "[parameters('queryPackQueries')[copyIndex()].labels]"
+          ]
+        }
+      }
+    }
+  ]
 }
